@@ -34,7 +34,6 @@ jobs:
       - name: Prepare directories
         run: |
           mkdir -p rules publish/surge publish/loon publish/egern publish/mihomo
-          # 确保基础文件存在
           touch rules/direct.txt rules/proxy.txt rules/reject.txt
 
       - name: Checkout domain-list-custom
@@ -75,19 +74,21 @@ jobs:
 
       - name: Build rule sources
         run: |
-          # 抓取并合并基础规则
+          # 1. Direct
           curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > direct.src
           curl -sSL $CUSTOM_DIRECT | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> direct.src
           cat rules/direct.txt >> direct.src
-          sort -fu direct.src > direct-final.txt
+          sort -fu direct.src > direct-list.txt
 
+          # 2. Proxy
           cat gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' > proxy.src
           curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
           curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
           curl -sSL $CUSTOM_PROXY | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> proxy.src
           cat rules/proxy.txt >> proxy.src
-          sort -fu proxy.src > proxy-final.txt
+          sort -fu proxy.src > proxy-list.txt
 
+          # 3. Reject
           curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' > reject.src
           curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' >> reject.src
           curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> reject.src
@@ -98,11 +99,12 @@ jobs:
       - name: Write geosite data
         run: |
           mkdir -p community/data
-          cp direct-final.txt community/data/cn
-          cp proxy-final.txt community/data/geolocation-\!cn
-          cp reject-final.txt community/data/category-ads-all
+          # 修正：直接引用构建出的 *-list.txt
+          cp direct-list.txt community/data/cn
+          cp proxy-list.txt community/data/geolocation-\!cn
+          cp reject-list.txt community/data/category-ads-all
           
-          # 自动将 rules 下的所有自定义 .txt 放入 geosite 二进制文件
+          # 自动处理 rules 文件夹下所有其他文件
           for f in rules/*.txt; do
             name=$(basename "$f" .txt)
             case $name in
@@ -118,7 +120,6 @@ jobs:
 
       - name: Generate client rules
         run: |
-          # 定义转换函数
           make_list () {
             src=$1
             name=$2
@@ -140,21 +141,20 @@ jobs:
             cp $src publish/$name-list.txt
           }
 
-          # 1. 处理三大基础规则
-          make_list direct-final.txt direct
-          make_list proxy-final.txt proxy
-          make_list reject-final.txt reject
+          # 1. 基础规则（不带 -final 命名）
+          make_list direct-list.txt direct
+          make_list proxy-list.txt proxy
+          make_list reject-list.txt reject
 
-          # 2. 【核心更新】自动循环处理 rules 文件夹下所有其他 .txt 文件
+          # 2. 自动化循环处理 rules 下的其他 txt
           for f in rules/*.txt; do
             name=$(basename "$f" .txt)
             case $name in
               direct|proxy|reject|*-need-to-remove) continue ;;
             esac
-            echo "Processing custom rule: $name"
-            # 排序去重后进行转换
-            sort -fu "$f" > "${name}-final.txt"
-            make_list "${name}-final.txt" "$name"
+            # 对自定义文件进行排序去重后转换
+            sort -fu "$f" > "${name}-list-temp.txt"
+            make_list "${name}-list-temp.txt" "$name"
           done
 
       - name: Prepare publish files
