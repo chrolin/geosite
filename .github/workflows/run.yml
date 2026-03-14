@@ -74,37 +74,35 @@ jobs:
 
       - name: Build rule sources
         run: |
-          # 1. Direct
-          curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > direct.src
-          curl -sSL $CUSTOM_DIRECT | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> direct.src
-          cat rules/direct.txt >> direct.src
-          sort -fu direct.src > direct-list.txt
+          # 1. 构建 Direct 并排序
+          curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > direct.txt
+          curl -sSL $CUSTOM_DIRECT | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> direct.txt
+          cat rules/direct.txt >> direct.txt
+          sort -fu direct.txt -o direct.txt
 
-          # 2. Proxy
-          cat gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' > proxy.src
-          curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
-          curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
-          curl -sSL $CUSTOM_PROXY | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> proxy.src
-          cat rules/proxy.txt >> proxy.src
-          sort -fu proxy.src > proxy-list.txt
+          # 2. 构建 Proxy 并排序
+          cat gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' > proxy.txt
+          curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.txt
+          curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.txt
+          curl -sSL $CUSTOM_PROXY | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> proxy.txt
+          cat rules/proxy.txt >> proxy.txt
+          sort -fu proxy.txt -o proxy.txt
 
-          # 3. Reject
-          curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' > reject.src
-          curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' >> reject.src
-          curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> reject.src
-          curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "$1\n"' | sed '1d' >> reject.src
-          cat rules/reject.txt >> reject.src
-          sort -fu reject.src > reject-list.txt
+          # 3. 构建 Reject 并排序
+          curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' > reject.txt
+          curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' >> reject.txt
+          curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> reject.txt
+          curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "$1\n"' | sed '1d' >> reject.txt
+          cat rules/reject.txt >> reject.txt
+          sort -fu reject.txt -o reject.txt
 
       - name: Write geosite data
         run: |
           mkdir -p community/data
-          # 修正：直接引用构建出的 *-list.txt
-          cp direct-list.txt community/data/cn
-          cp proxy-list.txt community/data/geolocation-\!cn
-          cp reject-list.txt community/data/category-ads-all
+          cp direct.txt community/data/cn
+          cp proxy.txt community/data/geolocation-\!cn
+          cp reject.txt community/data/category-ads-all
           
-          # 自动处理 rules 文件夹下所有其他文件
           for f in rules/*.txt; do
             name=$(basename "$f" .txt)
             case $name in
@@ -138,23 +136,22 @@ jobs:
             cp tmp.list publish/egern/$name.list
             echo "payload:" > publish/mihomo/$name.yaml
             sed 's/^/  - /' tmp.list >> publish/mihomo/$name.yaml
-            cp $src publish/$name-list.txt
+            cp $src publish/$name.txt
           }
 
-          # 1. 基础规则（不带 -final 命名）
-          make_list direct-list.txt direct
-          make_list proxy-list.txt proxy
-          make_list reject-list.txt reject
+          # 处理基础规则
+          make_list direct.txt direct
+          make_list proxy.txt proxy
+          make_list reject.txt reject
 
-          # 2. 自动化循环处理 rules 下的其他 txt
+          # 自动处理自定义规则
           for f in rules/*.txt; do
             name=$(basename "$f" .txt)
             case $name in
               direct|proxy|reject|*-need-to-remove) continue ;;
             esac
-            # 对自定义文件进行排序去重后转换
-            sort -fu "$f" > "${name}-list-temp.txt"
-            make_list "${name}-list-temp.txt" "$name"
+            sort -fu "$f" > "${name}_temp.txt"
+            make_list "${name}_temp.txt" "$name"
           done
 
       - name: Prepare publish files
@@ -166,7 +163,7 @@ jobs:
       - name: Hash and zip
         run: |
           cd publish
-          zip -q rules.zip *-list.txt geoip.dat geosite.dat
+          zip -q rules.zip *.txt *.dat
           sha256sum geosite.dat > geosite.dat.sha256sum
           sha256sum rules.zip > rules.zip.sha256sum
 
