@@ -14,7 +14,6 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-
       - name: Set vars
         run: |
           echo "RELEASE_NAME=Released on $(date +%Y%m%d%H%M)" >> $GITHUB_ENV
@@ -35,7 +34,8 @@ jobs:
       - name: Prepare directories
         run: |
           mkdir -p rules publish/surge publish/loon publish/egern publish/mihomo
-          touch rules/direct.txt rules/proxy.txt rules/reject.txt
+          # 确保必要文件存在，避免脚本中断
+          touch rules/direct.txt rules/proxy.txt rules/reject.txt rules/a.txt
           touch rules/direct-need-to-remove.txt rules/proxy-need-to-remove.txt rules/reject-need-to-remove.txt
 
       - name: Checkout domain-list-custom
@@ -76,35 +76,38 @@ jobs:
 
       - name: Build rule sources
         run: |
+          # Build Direct
           curl -sSL $CHINA_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' > direct.src
           curl -sSL $CUSTOM_DIRECT | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> direct.src
           cat rules/direct.txt >> direct.src
+          sort -fu direct.src > direct-list.txt
 
+          # Build Proxy
           cat gfwlist2dnsmasq/temp-gfwlist.txt | perl -ne '/^((?=^.{3,255})[a-zA-Z0-9][-_a-zA-Z0-9]{0,62}(\.[a-zA-Z0-9][-_a-zA-Z0-9]{0,62})+)/ && print "$1\n"' > proxy.src
           curl -sSL $GOOGLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
           curl -sSL $APPLE_DOMAINS_URL | perl -ne '/^server=\/([^\/]+)\// && print "$1\n"' >> proxy.src
           curl -sSL $CUSTOM_PROXY | grep -Ev ":@cn" | perl -ne '/^(domain):([^:]+)(\n$|:@.+)/ && print "$2\n"' >> proxy.src
           cat rules/proxy.txt >> proxy.src
+          sort -fu proxy.src > proxy-list.txt
 
+          # Build Reject
           curl -sSL $EASYLISTCHINA_EASYLIST_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' > reject.src
           curl -sSL $ADGUARD_DNS_REJECT_URL | perl -ne '/^\|\|([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})\^$/ && print "$1\n"' >> reject.src
           curl -sSL $PETERLOWE_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})$/ && print "$1\n"' >> reject.src
           curl -sSL $DANPOLLOCK_REJECT_URL | perl -ne '/^127\.0\.0\.1\s([-_0-9a-zA-Z]+(\.[-_0-9a-zA-Z]+){1,64})/ && print "$1\n"' | sed '1d' >> reject.src
           cat rules/reject.txt >> reject.src
-
-          sort -fu direct.src > direct-list.txt
-          sort -fu proxy.src > proxy-list.txt
           sort -fu reject.src > reject-list.txt
+
+          # Build Custom Set A (去重处理)
+          sort -fu rules/a.txt > a-list.txt
 
       - name: Apply remove lists
         run: |
-          cp direct-list.txt direct-final.txt
-          cp proxy-list.txt proxy-final.txt
-          cp reject-list.txt reject-final.txt
-
-          grep -Fvx -f rules/direct-need-to-remove.txt direct-list.txt > direct-final.txt || true
-          grep -Fvx -f rules/proxy-need-to-remove.txt proxy-list.txt > proxy-final.txt || true
-          grep -Fvx -f rules/reject-need-to-remove.txt reject-list.txt > reject-final.txt || true
+          grep -Fvx -f rules/direct-need-to-remove.txt direct-list.txt > direct-final.txt || cp direct-list.txt direct-final.txt
+          grep -Fvx -f rules/proxy-need-to-remove.txt proxy-list.txt > proxy-final.txt || cp proxy-list.txt proxy-final.txt
+          grep -Fvx -f rules/reject-need-to-remove.txt reject-list.txt > reject-final.txt || cp reject-list.txt reject-final.txt
+          # 自定义 a 规则不设排除逻辑，直接使用
+          cp a-list.txt a-final.txt
 
       - name: Write geosite data
         run: |
@@ -112,7 +115,8 @@ jobs:
           cp direct-final.txt community/data/cn
           cp proxy-final.txt community/data/geolocation-\!cn
           cp reject-final.txt community/data/category-ads-all
-
+          
+          # 自动将 rules 下的所有非特殊 txt 放入 geosite
           for f in rules/*.txt; do
             name=$(basename "$f" .txt)
             case $name in
@@ -131,7 +135,7 @@ jobs:
           make_list () {
             src=$1
             name=$2
-
+            [[ ! -f "$src" ]] && return
             while read line; do
               [[ -z "$line" ]] && continue
               case "$line" in
@@ -141,18 +145,16 @@ jobs:
                 *) echo "DOMAIN-SUFFIX,$line" ;;
               esac
             done < $src > tmp.list
-
             cp tmp.list publish/surge/$name.list
             cp tmp.list publish/loon/$name.list
             cp tmp.list publish/egern/$name.list
-
             echo "payload:" > publish/mihomo/$name.yaml
             sed 's/^/  - /' tmp.list >> publish/mihomo/$name.yaml
           }
-
           make_list direct-final.txt direct
           make_list proxy-final.txt proxy
           make_list reject-final.txt reject
+          make_list a-final.txt a
 
       - name: Prepare publish files
         run: |
@@ -162,17 +164,17 @@ jobs:
           cp direct-final.txt publish/direct-list.txt
           cp proxy-final.txt publish/proxy-list.txt
           cp reject-final.txt publish/reject-list.txt
+          cp a-final.txt publish/a-list.txt
 
       - name: Hash and zip
         run: |
           cd publish
-          zip -q rules.zip direct-list.txt proxy-list.txt reject-list.txt geoip.dat geosite.dat
+          zip -q rules.zip *-list.txt geoip.dat geosite.dat
           sha256sum geosite.dat > geosite.dat.sha256sum
           sha256sum rules.zip > rules.zip.sha256sum
 
       - name: Debug publish files
         run: |
-          echo "=== publish ==="
           ls -lah publish
 
       - name: Release assets
